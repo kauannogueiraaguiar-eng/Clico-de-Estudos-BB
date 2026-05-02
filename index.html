@@ -1090,7 +1090,12 @@ function renderHistResumo() {
 }
 
 // ── SESSÕES ──
-function renderHistSessoes() {
+// Pagination state for sessions tab
+let sessoesPage = 0;
+const SESSOES_PER_PAGE = 30; // days shown per page
+
+function renderHistSessoes(resetPage = true) {
+  if (resetPage) sessoesPage = 0;
   const hist = loadHistory();
   const el = document.getElementById('hist-sessoes');
   if (hist.length === 0) { el.innerHTML = '<div class="hist-empty">Nenhuma sessão ainda.</div>'; return; }
@@ -1101,9 +1106,15 @@ function renderHistSessoes() {
     if (!byDate[e.date]) byDate[e.date] = [];
     byDate[e.date].push(e);
   });
-  const dates = Object.keys(byDate).sort((a,b) => b.localeCompare(a));
+  const allDates = Object.keys(byDate).sort((a,b) => b.localeCompare(a));
 
-  const html = dates.map(date => {
+  // Paginate by days
+  const start = sessoesPage * SESSOES_PER_PAGE;
+  const pageDates = allDates.slice(start, start + SESSOES_PER_PAGE);
+  const hasMore = allDates.length > start + SESSOES_PER_PAGE;
+  const hasPrev = sessoesPage > 0;
+
+  const html = pageDates.map(date => {
     const label = date === todayStr() ? 'Hoje' : formatDate(date);
     const dayTotal = byDate[date].reduce((a,e) => a + (e.duration||0), 0);
     const entries = byDate[date].map(e => {
@@ -1121,15 +1132,30 @@ function renderHistSessoes() {
     const dh = Math.floor(dayTotal/3600), dm = Math.floor((dayTotal%3600)/60);
     return `<div class="hist-card">
       <div class="hist-card-header">
-        <div class="hist-card-title">${label}</div>
-        <div style="font-size:12px;color:var(--muted)">${dh > 0 ? dh+'h ' : ''}${dm}min</div>
+        <div><div class="hist-card-title">${label}</div><div style="font-size:12px;color:var(--muted)">${dh > 0 ? dh+'h ' : ''}${dm}min</div></div>
+        <button onclick="deleteDayHistory('${date}')" title="Apagar este dia" style="background:none;border:none;cursor:pointer;color:var(--muted2);padding:4px 6px;border-radius:6px;font-size:16px;line-height:1;transition:color .15s" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--muted2)'">🗑</button>
       </div>
       ${entries}
     </div>`;
   }).join('');
 
-  const clearBtn = `<div style="text-align:right;margin-bottom:12px"><button class="clear-btn" onclick="clearHistory()">Limpar histórico</button></div>`;
-  el.innerHTML = clearBtn + html;
+  // Pagination info
+  const pageInfo = `<div style="font-size:11px;color:var(--muted);text-align:center;margin-bottom:10px">
+    Mostrando dias ${start + 1}–${Math.min(start + SESSOES_PER_PAGE, allDates.length)} de ${allDates.length}
+  </div>`;
+
+  // Pagination buttons
+  const prevBtn = hasPrev
+    ? `<button class="btn-secondary" style="font-size:12px;padding:7px 16px" onclick="sessoesPage--;renderHistSessoes(false)">← Mais recentes</button>`
+    : '';
+  const nextBtn = hasMore
+    ? `<button class="btn-secondary" style="font-size:12px;padding:7px 16px" onclick="sessoesPage++;renderHistSessoes(false)">Mais antigos →</button>`
+    : '';
+  const pagination = (hasPrev || hasMore)
+    ? `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;margin-bottom:4px">${prevBtn}<span></span>${nextBtn}</div>`
+    : '';
+
+  el.innerHTML = pageInfo + html + pagination;
 }
 
 // ── ANOTAÇÕES ──
@@ -1141,14 +1167,15 @@ function renderHistAnotacoes() {
 
   const html = subjects.map(s => {
     const entries = notes[s.abbr];
-    const items = entries.map(e => {
+    const items = entries.map((e, i) => {
       const label = e.date === todayStr() ? 'hoje' : formatDate(e.date);
-      return `<div class="sess-entry">
+      return `<div class="sess-entry" style="align-items:center">
         <div class="sess-date">${label}</div>
         <div class="sess-body">
           ${e.text ? `<div class="sess-note">${e.text}</div>` : '<div class="sess-note" style="color:var(--muted2)">sem texto</div>'}
           ${e.duration ? `<div class="sess-meta">${fmtTime(e.duration)}</div>` : ''}
         </div>
+        <button onclick="deleteNote('${s.abbr}', ${i})" title="Apagar anotação" style="background:none;border:none;cursor:pointer;color:var(--muted2);padding:4px 6px;border-radius:6px;font-size:15px;line-height:1;flex-shrink:0;transition:color .15s" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--muted2)'">🗑</button>
       </div>`;
     }).join('');
     return `<div class="hist-card">
@@ -1159,11 +1186,29 @@ function renderHistAnotacoes() {
   el.innerHTML = html;
 }
 
-function clearHistory() {
-  if (!confirm('Apagar todo o histórico de sessões?')) return;
-  localStorage.removeItem(HISTORY_KEY);
-  renderHistSessoes();
-  notify('Histórico apagado.');
+function deleteDayHistory(date) {
+  const label = date === todayStr() ? 'hoje' : formatDate(date);
+  if (!confirm(`Apagar o histórico do dia ${label}?`)) return;
+  if (!confirm(`Tem certeza? Esta ação não pode ser desfeita.`)) return;
+  let hist = loadHistory();
+  hist = hist.filter(e => e.date !== date);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(hist));
+  renderHistSessoes(false);
+  notify('Dia removido do histórico.');
+}
+
+function deleteNote(abbr, idx) {
+  const notes = loadNotes();
+  const entry = notes[abbr] && notes[abbr][idx];
+  const preview = entry && entry.text ? `"${entry.text.slice(0, 40)}${entry.text.length > 40 ? '...' : ''}"` : 'esta anotação';
+  if (!confirm(`Apagar ${preview}?`)) return;
+  if (!confirm('Tem certeza? Esta ação não pode ser desfeita.')) return;
+  if (!notes[abbr]) return;
+  notes[abbr].splice(idx, 1);
+  if (notes[abbr].length === 0) delete notes[abbr];
+  localStorage.setItem(NOTES_KEY, JSON.stringify(notes));
+  renderHistAnotacoes();
+  notify('Anotação removida.');
 }
 
 function formatDate(str) {
