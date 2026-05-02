@@ -3,8 +3,26 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0f0f13">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Circuito Loop">
+<link rel="manifest" href="manifest.json">
 <title>Circuito Loop — Banco do Brasil</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+<meta name="theme-color" content="#0f0f13">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Circuito Loop">
+<link rel="manifest" href="manifest.json">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f0f13">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Circuito Loop">
 <style>
 :root {
   --bg:#0f0f13; --surface:#17171e; --surface2:#1e1e27;
@@ -511,6 +529,7 @@ let state = {
 // INIT
 // ──────────────────────────────────────────
 function init() {
+  requestNotifPermission();
   const saved = loadState();
   if (saved) {
     state.queue = saved.queue.map(a => ALL_SUBJECTS.find(s => s.abbr === a)).filter(Boolean);
@@ -864,31 +883,99 @@ function notify(msg, duration = 3000) {
   setTimeout(() => bar.classList.remove('show'), duration);
 }
 
-function testSound() {
-  playBell('goal');
-  notify('🔔 Testando som de meta atingida!');
+// ── Alert sound (loops until user interacts) ──
+let alertInterval = null;
+let alertCtx = null;
+
+function stopAlert() {
+  if (alertInterval) { clearInterval(alertInterval); alertInterval = null; }
+  if (alertCtx) { try { alertCtx.close(); } catch(e){} alertCtx = null; }
+}
+
+function playBellOnce(ctx, type, offset) {
+  const freqs = type === 'goal' ? [523, 659, 784] : [784, 659, 523];
+  freqs.forEach((freq, i) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    const t = ctx.currentTime + offset + i * 0.18;
+    gain.gain.setValueAtTime(0.28, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+    osc.start(t);
+    osc.stop(t + 0.6);
+  });
 }
 
 function playBell(type) {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const freqs = type === 'goal' ? [523, 659, 784] : [784, 659, 523];
-    freqs.forEach((freq, i) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0.25, ctx.currentTime + i * 0.18);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.18 + 0.5);
-      osc.start(ctx.currentTime + i * 0.18);
-      osc.stop(ctx.currentTime + i * 0.18 + 0.5);
-    });
-    // Also show notification
-    if (type === 'goal') notify('🎯 Meta de 50 min atingida!');
+    stopAlert();
+    alertCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = alertCtx;
+
+    // Play immediately
+    playBellOnce(ctx, type, 0);
+    if (type === 'goal') {
+      notify('🎯 Meta de 50 min atingida! Toque em qualquer botão para parar o aviso.');
+      sendSystemNotif('🎯 Meta atingida!', 'Você completou 50 min de estudo. Hora de finalizar a sessão.');
+    }
+    if (type === 'interval') {
+      notify('⏱ Intervalo concluído! Hora de estudar.');
+      sendSystemNotif('⏱ Intervalo concluído!', 'Descansou 10 minutos. Hora de voltar aos estudos!');
+    }
+
+    // Repeat every 4 seconds for up to 5 minutes
+    let count = 0;
+    const maxRings = 75; // 5 min / 4s = 75
+    alertInterval = setInterval(() => {
+      count++;
+      if (count >= maxRings) { stopAlert(); return; }
+      try { playBellOnce(ctx, type, 0); } catch(e) { stopAlert(); }
+    }, 4000);
+
   } catch(e) {}
 }
+
+// ── System Notification ──
+async function requestNotifPermission() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'default') {
+    await Notification.requestPermission();
+  }
+}
+
+function sendSystemNotif(title, body) {
+  if (!('Notification' in window)) return;
+  if (Notification.permission !== 'granted') return;
+  try {
+    const n = new Notification(title, {
+      body: body,
+      icon: 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2220%22 fill=%22%230f0f13%22/><text y=%22.9em%22 font-size=%2280%22 x=%2210%22>📚</text></svg>',
+      tag: 'circuito-loop',
+      renotify: true,
+      requireInteraction: true,
+    });
+    n.onclick = () => { window.focus(); n.close(); stopAlert(); };
+  } catch(e) {}
+}
+
+// ── PWA Service Worker ──
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
+
+function testSound() {
+  playBell('goal');
+}
+
+// Stop alert on any button click
+document.addEventListener('click', function(e) {
+  if (alertInterval && e.target.tagName === 'BUTTON') stopAlert();
+}, true);
 
 // ──────────────────────────────────────────
 // HELPERS
@@ -1070,9 +1157,43 @@ function formatDate(str) {
 }
 
 // ──────────────────────────────────────────
+// SYSTEM NOTIFICATIONS
+// ──────────────────────────────────────────
+async function requestNotifPermission() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'default') {
+    await Notification.requestPermission();
+  }
+}
+
+function sendSystemNotif(title, body) {
+  if (!('Notification' in window)) return;
+  if (Notification.permission !== 'granted') return;
+  try {
+    const n = new Notification(title, {
+      body: body,
+      icon: 'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f3af.png',
+      badge: 'https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/1f514.png',
+      vibrate: [200, 100, 200],
+      requireInteraction: true,
+      tag: 'circuito-loop',
+    });
+    n.onclick = () => { window.focus(); n.close(); stopAlert(); };
+  } catch(e) {}
+}
+
+// Register service worker for PWA
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
+
+// ──────────────────────────────────────────
 // START
 // ──────────────────────────────────────────
 init();
+requestNotifPermission();
 </script>
 </body>
 </html>
