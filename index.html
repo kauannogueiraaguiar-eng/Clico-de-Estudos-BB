@@ -423,31 +423,6 @@ body{padding-bottom:80px}
   </div>
 </div>
 
-<!-- Firebase -->
-<script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-app.js";
-  import { getFirestore, doc, getDoc, setDoc, collection, addDoc, getDocs, deleteDoc, query, orderBy, where } from "https://www.gstatic.com/firebasejs/12.12.1/firebase-firestore.js";
-
-  try {
-    const firebaseConfig = {
-      apiKey: "AIzaSyC_Ui5tO1_w9A1riKETqo0qLMv9X2c9mO8",
-      authDomain: "projeto-circuito-bb.firebaseapp.com",
-      projectId: "projeto-circuito-bb",
-      storageBucket: "projeto-circuito-bb.firebasestorage.app",
-      messagingSenderId: "174746888395",
-      appId: "1:174746888395:web:88fb265c4d1751458f534e"
-    };
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
-    window.__db = db;
-    window.__fbModules = { doc, getDoc, setDoc, collection, addDoc, getDocs, deleteDoc, query, orderBy, where };
-    window.__fbReady = true;
-  } catch(e) {
-    console.warn('Firebase failed to init, using localStorage fallback', e);
-    window.__fbReady = false;
-  }
-  window.dispatchEvent(new Event('firebase-ready'));
-</script>
 <script>
 // ──────────────────────────────────────────
 // DATA
@@ -477,23 +452,13 @@ const WEEK_SCHEDULE = [
 ];
 
 // ──────────────────────────────────────────
-// PERSISTENCE — localStorage (primary) + Firestore (sync)
+// PERSISTENCE (localStorage)
 // ──────────────────────────────────────────
-const LS_STATE   = 'circuito_loop_v1';
-const LS_NOTES   = 'circuito_loop_notes_v1';
-const LS_HISTORY = 'circuito_loop_history_v1';
-const USER_ID    = 'kau';
+const STORAGE_KEY = 'circuito_loop_v1';
+const NOTES_KEY   = 'circuito_loop_notes_v1';
+const HISTORY_KEY = 'circuito_loop_history_v1';
 
-function db() { return window.__db; }
-function fb() { return window.__fbModules; }
-const FB_TIMEOUT = 3000; // ms before giving up on Firebase
-
-function withTimeout(promise, ms) {
-  return Promise.race([promise, new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
-}
-
-// ── STATE ──
-async function saveState() {
+function saveState() {
   const today = todayStr();
   const data = {
     date: today,
@@ -502,151 +467,44 @@ async function saveState() {
     sessionsToday: state.sessionsToday,
     totalLiquid: state.totalLiquid,
   };
-  // Always save locally first (instant)
-  localStorage.setItem(LS_STATE, JSON.stringify(data));
-  // Then sync to Firestore in background
-  if (window.__fbReady) {
-    try {
-      const { doc, setDoc } = fb();
-      await withTimeout(setDoc(doc(db(), 'state', USER_ID), data), FB_TIMEOUT);
-    } catch(e) { console.warn('saveState Firebase error', e); }
-  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
-async function loadState() {
-  // Try Firestore first with timeout
-  if (window.__fbReady) {
-    try {
-      const { doc, getDoc } = fb();
-      const snap = await withTimeout(getDoc(doc(db(), 'state', USER_ID)), FB_TIMEOUT);
-      if (snap.exists()) {
-        const data = snap.data();
-        if (data.date === todayStr()) {
-          localStorage.setItem(LS_STATE, JSON.stringify(data)); // keep local in sync
-          return data;
-        }
-      }
-    } catch(e) { console.warn('loadState Firebase timeout, using local', e); }
-  }
-  // Fallback to localStorage
+function loadState() {
   try {
-    const raw = localStorage.getItem(LS_STATE);
+    const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
+    // Only restore if same day
     if (data.date !== todayStr()) return null;
     return data;
   } catch(e) { return null; }
 }
 
-// ── NOTES ──
-async function saveNote(abbr, noteData) {
-  // Save to localStorage
-  let notes = JSON.parse(localStorage.getItem(LS_NOTES) || '{}');
+function saveNote(abbr, note) {
+  let notes = loadNotes();
   if (!notes[abbr]) notes[abbr] = [];
-  const entry = { id: Date.now().toString(), date: todayStr(), text: noteData.text || '', duration: noteData.duration || 0 };
-  notes[abbr].unshift(entry);
+  notes[abbr].unshift({ date: todayStr(), text: note });
+  // Keep last 30 entries per subject
   notes[abbr] = notes[abbr].slice(0, 30);
-  localStorage.setItem(LS_NOTES, JSON.stringify(notes));
-  // Sync to Firestore in background
-  if (window.__fbReady) {
-    try {
-      const { collection, addDoc } = fb();
-      await withTimeout(addDoc(collection(db(), 'notes'), { user: USER_ID, abbr, ...entry }), FB_TIMEOUT);
-    } catch(e) { console.warn('saveNote Firebase error', e); }
-  }
+  localStorage.setItem(NOTES_KEY, JSON.stringify(notes));
 }
 
-async function loadNotes() {
-  if (window.__fbReady) {
-    try {
-      const { collection, getDocs, query, where, orderBy } = fb();
-      const q = query(collection(db(), 'notes'), where('user','==',USER_ID), orderBy('date','desc'));
-      const snap = await withTimeout(getDocs(q), FB_TIMEOUT);
-      const notes = {};
-      snap.forEach(d => {
-        const e = d.data();
-        if (!notes[e.abbr]) notes[e.abbr] = [];
-        notes[e.abbr].push({ id: d.id, date: e.date, text: e.text, duration: e.duration });
-      });
-      localStorage.setItem(LS_NOTES, JSON.stringify(notes));
-      return notes;
-    } catch(e) { console.warn('loadNotes Firebase timeout, using local', e); }
-  }
-  try { return JSON.parse(localStorage.getItem(LS_NOTES)) || {}; }
+function loadNotes() {
+  try { return JSON.parse(localStorage.getItem(NOTES_KEY)) || {}; }
   catch(e) { return {}; }
 }
 
-async function deleteNoteById(id) {
-  // Remove from localStorage
-  try {
-    let notes = JSON.parse(localStorage.getItem(LS_NOTES) || '{}');
-    for (const abbr in notes) {
-      notes[abbr] = notes[abbr].filter(e => e.id !== id);
-      if (notes[abbr].length === 0) delete notes[abbr];
-    }
-    localStorage.setItem(LS_NOTES, JSON.stringify(notes));
-  } catch(e) {}
-  // Sync to Firestore
-  if (window.__fbReady) {
-    try {
-      const { doc, deleteDoc } = fb();
-      await withTimeout(deleteDoc(doc(db(), 'notes', id)), FB_TIMEOUT);
-    } catch(e) { console.warn('deleteNote Firebase error', e); }
-  }
+function saveHistory(entry) {
+  let hist = loadHistory();
+  hist.unshift(entry);
+  hist = hist.slice(0, 100);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(hist));
 }
 
-// ── HISTORY ──
-async function saveHistory(entry) {
-  // Save to localStorage
-  try {
-    let hist = JSON.parse(localStorage.getItem(LS_HISTORY) || '[]');
-    const newEntry = { id: Date.now().toString(), ...entry };
-    hist.unshift(newEntry);
-    hist = hist.slice(0, 500);
-    localStorage.setItem(LS_HISTORY, JSON.stringify(hist));
-  } catch(e) {}
-  // Sync to Firestore in background
-  if (window.__fbReady) {
-    try {
-      const { collection, addDoc } = fb();
-      await withTimeout(addDoc(collection(db(), 'history'), { user: USER_ID, ...entry }), FB_TIMEOUT);
-    } catch(e) { console.warn('saveHistory Firebase error', e); }
-  }
-}
-
-async function loadHistory() {
-  // Try Firestore with timeout
-  if (window.__fbReady) {
-    try {
-      const { collection, getDocs, query, where, orderBy } = fb();
-      const q = query(collection(db(), 'history'), where('user','==',USER_ID), orderBy('date','desc'));
-      const snap = await withTimeout(getDocs(q), FB_TIMEOUT);
-      const hist = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      localStorage.setItem(LS_HISTORY, JSON.stringify(hist));
-      return hist;
-    } catch(e) { console.warn('loadHistory Firebase timeout, using local', e); }
-  }
-  // Fallback to localStorage
-  try { return JSON.parse(localStorage.getItem(LS_HISTORY)) || []; }
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; }
   catch(e) { return []; }
-}
-
-async function deleteHistoryDay(date) {
-  // Remove from localStorage
-  try {
-    let hist = JSON.parse(localStorage.getItem(LS_HISTORY) || '[]');
-    hist = hist.filter(e => e.date !== date);
-    localStorage.setItem(LS_HISTORY, JSON.stringify(hist));
-  } catch(e) {}
-  // Sync to Firestore
-  if (window.__fbReady) {
-    try {
-      const { collection, getDocs, query, where, deleteDoc, doc } = fb();
-      const q = query(collection(db(), 'history'), where('user','==',USER_ID), where('date','==',date));
-      const snap = await withTimeout(getDocs(q), FB_TIMEOUT);
-      for (const d of snap.docs) await deleteDoc(doc(db(), 'history', d.id));
-    } catch(e) { console.warn('deleteHistoryDay Firebase error', e); }
-  }
 }
 
 function todayStr() {
@@ -672,41 +530,19 @@ let state = {
 // ──────────────────────────────────────────
 // INIT
 // ──────────────────────────────────────────
-async function init() {
+function init() {
   requestNotifPermission();
-  // Load from localStorage immediately — no waiting
-  try {
-    const raw = localStorage.getItem(LS_STATE);
-    if (raw) {
-      const data = JSON.parse(raw);
-      if (data.date === todayStr()) {
-        state.queue = data.queue.map(a => ALL_SUBJECTS.find(s => s.abbr === a)).filter(Boolean);
-        state.currentIdx = data.currentIdx;
-        state.sessionsToday = data.sessionsToday;
-        state.totalLiquid = data.totalLiquid;
-      } else { buildDefaultQueue(); }
-    } else { buildDefaultQueue(); }
-  } catch(e) { buildDefaultQueue(); }
+  const saved = loadState();
+  if (saved) {
+    state.queue = saved.queue.map(a => ALL_SUBJECTS.find(s => s.abbr === a)).filter(Boolean);
+    state.currentIdx = saved.currentIdx;
+    state.sessionsToday = saved.sessionsToday;
+    state.totalLiquid = saved.totalLiquid;
+  } else {
+    buildDefaultQueue();
+  }
   setView('idle');
   renderStats();
-  // Then silently sync from Firestore in background
-  if (window.__fbReady) {
-    try {
-      const { doc, getDoc } = fb();
-      const snap = await withTimeout(getDoc(doc(db(), 'state', USER_ID)), FB_TIMEOUT);
-      if (snap.exists()) {
-        const data = snap.data();
-        if (data.date === todayStr() && data.sessionsToday > state.sessionsToday) {
-          state.queue = data.queue.map(a => ALL_SUBJECTS.find(s => s.abbr === a)).filter(Boolean);
-          state.currentIdx = data.currentIdx;
-          state.sessionsToday = data.sessionsToday;
-          state.totalLiquid = data.totalLiquid;
-          renderStats();
-          notify('🔄 Dados sincronizados com a nuvem!');
-        }
-      }
-    } catch(e) { /* silently ignore */ }
-  }
 }
 
 function buildDefaultQueue() {
@@ -758,12 +594,12 @@ function renderIdleCard() {
   if (!s) { document.getElementById('idle-name').textContent = 'Fila concluída ✓'; document.getElementById('idle-freq').textContent = 'Todas as sessões do dia foram feitas!'; return; }
   document.getElementById('idle-name').textContent = s.name;
   document.getElementById('idle-freq').textContent = s.freq + 'x por semana';
-  await renderNotesPanel(s.abbr);
+  renderNotesPanel(s.abbr);
 }
 
-async function renderNotesPanel(abbr) {
+function renderNotesPanel(abbr) {
   const panel = document.getElementById('notes-panel');
-  const notes = await loadNotes();
+  const notes = loadNotes();
   const entries = notes[abbr] || [];
   if (entries.length === 0) { panel.style.display = 'none'; return; }
   panel.style.display = '';
@@ -875,16 +711,18 @@ function finishSession() {
   setView('finish');
 }
 
-async function commitSession() {
+function commitSession() {
   const s = state.queue[state.currentIdx];
   const note = (document.getElementById('finish-note').value || '').trim();
   const qTotal = parseInt(document.getElementById('q-total').value) || 0;
   const qCorrect = parseInt(document.getElementById('q-correct').value) || 0;
 
-  if (note && s) await saveNote(s.abbr, { text: note, duration: state.elapsed });
+  // Save note per subject
+  if (note && s) saveNote(s.abbr, note);
 
+  // Save to history
   if (s) {
-    await saveHistory({
+    saveHistory({
       date: todayStr(),
       subject: s.name,
       abbr: s.abbr,
@@ -899,11 +737,11 @@ async function commitSession() {
   state.sessionsToday++;
   state.currentIdx++;
   renderStats();
-  await saveState();
+  saveState();
 }
 
-async function saveAndInterval() {
-  await commitSession();
+function saveAndInterval() {
+  commitSession();
   if (state.currentIdx >= state.queue.length) { showDone(); return; }
   // Start interval
   const next = state.queue[state.currentIdx];
@@ -934,14 +772,14 @@ function skipInterval() {
   renderStats();
 }
 
-async function saveAndNext() {
-  await commitSession();
+function saveAndNext() {
+  commitSession();
   if (state.currentIdx >= state.queue.length) { showDone(); return; }
   setView('idle');
 }
 
-async function finishDay() {
-  await commitSession();
+function finishDay() {
+  commitSession();
   showDone();
 }
 
@@ -1177,10 +1015,10 @@ function switchPage(page) {
   document.getElementById('hist-screen').classList.toggle('active', page === 'hist');
   document.getElementById('nav-home').classList.toggle('active', page === 'home');
   document.getElementById('nav-hist').classList.toggle('active', page === 'hist');
-  if (page === 'hist') await renderHistTab(currentHistTab);
+  if (page === 'hist') renderHistTab(currentHistTab);
 }
 
-async function switchHistTab(tab) {
+function switchHistTab(tab) {
   currentHistTab = tab;
   document.querySelectorAll('.hist-tab').forEach((b,i) => {
     b.classList.toggle('active', ['resumo','sessoes','anotacoes'][i] === tab);
@@ -1188,18 +1026,18 @@ async function switchHistTab(tab) {
   ['resumo','sessoes','anotacoes'].forEach(t => {
     document.getElementById('hist-'+t).style.display = t === tab ? '' : 'none';
   });
-  await renderHistTab(tab);
+  renderHistTab(tab);
 }
 
-async function renderHistTab(tab) {
-  if (tab === 'resumo')    await renderHistResumo();
-  if (tab === 'sessoes')   await renderHistSessoes();
-  if (tab === 'anotacoes') await renderHistAnotacoes();
+function renderHistTab(tab) {
+  if (tab === 'resumo')    renderHistResumo();
+  if (tab === 'sessoes')   renderHistSessoes();
+  if (tab === 'anotacoes') renderHistAnotacoes();
 }
 
 // ── RESUMO ──
-async function renderHistResumo() {
-  const hist = await loadHistory();
+function renderHistResumo() {
+  const hist = loadHistory();
   const el = document.getElementById('hist-resumo');
   if (hist.length === 0) {
     el.innerHTML = '<div class="hist-empty">Nenhuma sessão registrada ainda.</div>';
@@ -1256,9 +1094,9 @@ async function renderHistResumo() {
 let sessoesPage = 0;
 const SESSOES_PER_PAGE = 30; // days shown per page
 
-async function renderHistSessoes(resetPage = true) {
+function renderHistSessoes(resetPage = true) {
   if (resetPage) sessoesPage = 0;
-  const hist = await loadHistory();
+  const hist = loadHistory();
   const el = document.getElementById('hist-sessoes');
   if (hist.length === 0) { el.innerHTML = '<div class="hist-empty">Nenhuma sessão ainda.</div>'; return; }
 
@@ -1321,8 +1159,8 @@ async function renderHistSessoes(resetPage = true) {
 }
 
 // ── ANOTAÇÕES ──
-async function renderHistAnotacoes() {
-  const notes = await loadNotes();
+function renderHistAnotacoes() {
+  const notes = loadNotes();
   const el = document.getElementById('hist-anotacoes');
   const subjects = ALL_SUBJECTS.filter(s => notes[s.abbr] && notes[s.abbr].length > 0);
   if (subjects.length === 0) { el.innerHTML = '<div class="hist-empty">Nenhuma anotação ainda. Escreva "onde parei" ao finalizar uma sessão.</div>'; return; }
@@ -1337,7 +1175,7 @@ async function renderHistAnotacoes() {
           ${e.text ? `<div class="sess-note">${e.text}</div>` : '<div class="sess-note" style="color:var(--muted2)">sem texto</div>'}
           ${e.duration ? `<div class="sess-meta">${fmtTime(e.duration)}</div>` : ''}
         </div>
-        <button onclick="deleteNote('${s.abbr}', '${e.id}', '${(e.text||'').replace(/'/g,'')}')" title="Apagar anotação" style="background:none;border:none;cursor:pointer;color:var(--muted2);padding:4px 6px;border-radius:6px;font-size:15px;line-height:1;flex-shrink:0;transition:color .15s" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--muted2)'">🗑</button>
+        <button onclick="deleteNote('${s.abbr}', ${i})" title="Apagar anotação" style="background:none;border:none;cursor:pointer;color:var(--muted2);padding:4px 6px;border-radius:6px;font-size:15px;line-height:1;flex-shrink:0;transition:color .15s" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--muted2)'">🗑</button>
       </div>`;
     }).join('');
     return `<div class="hist-card">
@@ -1348,20 +1186,27 @@ async function renderHistAnotacoes() {
   el.innerHTML = html;
 }
 
-async function deleteDayHistory(date) {
+function deleteDayHistory(date) {
   const label = date === todayStr() ? 'hoje' : formatDate(date);
   if (!confirm(`Apagar o histórico do dia ${label}?`)) return;
-  if (!confirm('Tem certeza? Esta ação não pode ser desfeita.')) return;
-  await deleteHistoryDay(date);
+  if (!confirm(`Tem certeza? Esta ação não pode ser desfeita.`)) return;
+  let hist = loadHistory();
+  hist = hist.filter(e => e.date !== date);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(hist));
   renderHistSessoes(false);
   notify('Dia removido do histórico.');
 }
 
-async function deleteNote(abbr, noteId, previewText) {
-  const preview = previewText ? `"${previewText.slice(0, 40)}${previewText.length > 40 ? '...' : ''}"` : 'esta anotação';
+function deleteNote(abbr, idx) {
+  const notes = loadNotes();
+  const entry = notes[abbr] && notes[abbr][idx];
+  const preview = entry && entry.text ? `"${entry.text.slice(0, 40)}${entry.text.length > 40 ? '...' : ''}"` : 'esta anotação';
   if (!confirm(`Apagar ${preview}?`)) return;
   if (!confirm('Tem certeza? Esta ação não pode ser desfeita.')) return;
-  await deleteNoteById(noteId);
+  if (!notes[abbr]) return;
+  notes[abbr].splice(idx, 1);
+  if (notes[abbr].length === 0) delete notes[abbr];
+  localStorage.setItem(NOTES_KEY, JSON.stringify(notes));
   renderHistAnotacoes();
   notify('Anotação removida.');
 }
@@ -1407,12 +1252,8 @@ if ('serviceWorker' in navigator) {
 // ──────────────────────────────────────────
 // START
 // ──────────────────────────────────────────
-// Wait for Firebase to be ready before init
-if (window.__fbReady) {
-  init();
-} else {
-  window.addEventListener('firebase-ready', init);
-}
+init();
+requestNotifPermission();
 </script>
 </body>
 </html>
