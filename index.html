@@ -216,7 +216,7 @@ body{padding-bottom:80px}
 <div class="hero">
   <div class="hero-eyebrow">Método de estudos</div>
   <h1>Circuito Loop<br><em>Banco do Brasil</em></h1>
-  <p>Alterne as matérias, mantenha o ritmo. 50 min de estudo, 10 min de intervalo.</p>
+  <p id="hero-subtitle">Alterne as matérias, mantenha o ritmo. 50 min de estudo, 10 min de intervalo.</p>
 </div>
 
 <!-- Stats bar -->
@@ -250,6 +250,17 @@ body{padding-bottom:80px}
       </div>
     </div>
     <div class="queue-card" id="queue-card"></div>
+    <!-- Timer mode selector -->
+    <div style="background:var(--surface);border:0.5px solid var(--border);border-radius:var(--radius);padding:14px 20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div style="font-family:'Syne',sans-serif;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:6px">Modo de sessão</div>
+        <div style="display:flex;gap:8px" id="mode-btns">
+          <button onclick="setTimerMode(0)" id="mode-btn-0" style="font-family:'Syne',sans-serif;font-size:11px;font-weight:600;padding:5px 14px;border-radius:99px;border:0.5px solid var(--green);background:rgba(62,201,142,0.1);color:var(--green);cursor:pointer">50 / 10 min</button>
+          <button onclick="setTimerMode(1)" id="mode-btn-1" style="font-family:'Syne',sans-serif;font-size:11px;font-weight:600;padding:5px 14px;border-radius:99px;border:0.5px solid var(--border);background:transparent;color:var(--muted);cursor:pointer">90 / 15 min</button>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--muted2)" id="mode-label">estudo / intervalo</div>
+    </div>
     <div class="queue-card" id="notes-panel" style="margin-top:0;display:none"></div>
   </div>
 
@@ -328,7 +339,7 @@ body{padding-bottom:80px}
     </div>
     <div class="btn-row" style="flex-direction:column;gap:8px">
       <div class="btn-row">
-        <button class="btn-secondary" onclick="saveAndInterval()">Salvar e descansar 10 min</button>
+        <button class="btn-secondary" onclick="saveAndInterval()" id="btn-save-interval">Salvar e descansar 10 min</button>
         <button class="btn-primary" onclick="saveAndNext()">Salvar e próxima já</button>
       </div>
       <button class="btn-danger" onclick="finishDay()">Encerrar por hoje</button>
@@ -428,27 +439,33 @@ body{padding-bottom:80px}
 // DATA
 // ──────────────────────────────────────────
 const ALL_SUBJECTS = [
-  { name: "Vendas e Negociação",              abbr: "VENO", freq: 4 },
+  { name: "Vendas e Negociação",              abbr: "VENO", freq: 5 },
   { name: "Conhecimentos de Informática",     abbr: "COIN", freq: 4 },
   { name: "Língua Portuguesa",                abbr: "PORT", freq: 2 },
-  { name: "Matemática Financeira",            abbr: "MAFE", freq: 3 },
-  { name: "Conhecimentos Bancários",          abbr: "COBA", freq: 3 },
-  { name: "Matemática",                       abbr: "MATE", freq: 2 },
-  { name: "Atualidades do Mercado Financeiro",abbr: "ATFE", freq: 1 },
-  { name: "Língua Inglesa",                   abbr: "INGL", freq: 1 },
+  { name: "Matemática Financeira",            abbr: "MAFI", freq: 3 },
+  { name: "Conhecimentos Bancários",          abbr: "COBA", freq: 2 },
+  { name: "Matemática",                       abbr: "MATE", freq: 1 },
+  { name: "Atualidades do Mercado Financeiro",abbr: "AFIN", freq: 1 },
+  { name: "Língua Inglesa",                   abbr: "LING", freq: 1 },
 ];
 
-const TARGET_SESSIONS = 4;
-const SESSION_GOAL    = 50 * 60; // 50 min in seconds
-const INTERVAL_TOTAL  = 10 * 60; // 10 min
+const TARGET_SESSIONS = 3;
+// Timer modes: [sessionMins, intervalMins]
+const TIMER_MODES = [
+  { label: '50 min / 10 min', session: 50 * 60, interval: 10 * 60 },
+  { label: '90 min / 15 min', session: 90 * 60, interval: 15 * 60 },
+];
+let timerModeIdx = parseInt(localStorage.getItem('cl_timer_mode') || '0');
+function SESSION_GOAL()   { return TIMER_MODES[timerModeIdx].session; }
+function INTERVAL_TOTAL() { return TIMER_MODES[timerModeIdx].interval; }
 
 // Default weekly schedule (5 days) — user defined
 const WEEK_SCHEDULE = [
-  ["VENO","VENO","PORT","MATE"],   // seg
-  ["COIN","COIN","MAFE","MAFE"],   // ter
-  ["PORT","MATE","VENO","COBA"],   // qua
-  ["MAFE","COIN","INGL","ATFE"],   // qui
-  ["COBA","COBA","VENO","COIN"],   // sex
+  ["VENO","PORT","MATE"],   // seg
+  ["COIN","LING","MAFI"],   // ter
+  ["VENO","PORT","COBA"],   // qua
+  ["COIN","MAFI","AFIN"],   // qui
+  ["VENO","COBA","COIN"],   // sex
 ];
 
 // ──────────────────────────────────────────
@@ -530,6 +547,28 @@ let state = {
 // ──────────────────────────────────────────
 // INIT
 // ──────────────────────────────────────────
+function setTimerMode(idx) {
+  timerModeIdx = idx;
+  localStorage.setItem('cl_timer_mode', String(idx));
+  TIMER_MODES.forEach((m, i) => {
+    const btn = document.getElementById('mode-btn-' + i);
+    if (!btn) return;
+    if (i === idx) {
+      btn.style.borderColor = 'var(--green)';
+      btn.style.background = 'rgba(62,201,142,0.1)';
+      btn.style.color = 'var(--green)';
+    } else {
+      btn.style.borderColor = 'var(--border)';
+      btn.style.background = 'transparent';
+      btn.style.color = 'var(--muted)';
+    }
+  });
+  const sub = document.getElementById('hero-subtitle');
+  if (sub) sub.textContent = 'Alterne as matérias, mantenha o ritmo. ' + Math.floor(SESSION_GOAL()/60) + ' min de estudo, ' + Math.floor(INTERVAL_TOTAL()/60) + ' min de intervalo.';
+  const ibtn = document.getElementById('btn-save-interval');
+  if (ibtn) ibtn.textContent = 'Salvar e descansar ' + Math.floor(INTERVAL_TOTAL()/60) + ' min';
+}
+
 function init() {
   requestNotifPermission();
   const saved = loadState();
@@ -543,6 +582,7 @@ function init() {
   }
   setView('idle');
   renderStats();
+  setTimerMode(timerModeIdx);
 }
 
 function buildDefaultQueue() {
@@ -673,7 +713,7 @@ function updateTimer() {
 
   // Pomodoro ring: circumference = 2 * pi * 88 ≈ 553
   const CIRC = 553;
-  const pct = Math.min(state.elapsed / SESSION_GOAL, 1);
+  const pct = Math.min(state.elapsed / SESSION_GOAL(), 1);
   const offset = CIRC - pct * CIRC;
   const ring = document.getElementById('pomo-ring');
   if (ring) ring.style.strokeDashoffset = offset;
@@ -682,21 +722,21 @@ function updateTimer() {
   const hint = document.getElementById('timer-hint');
   const sublabel = document.getElementById('pomo-sublabel');
 
-  if (state.elapsed >= SESSION_GOAL) {
+  if (state.elapsed >= SESSION_GOAL()) {
     el.classList.add('goal-reached');
     if (ring) ring.style.stroke = 'var(--green)';
     hint.textContent = '✓ Meta atingida! Finalize quando quiser.';
     if (sublabel) sublabel.textContent = 'concluído';
-    if (state.elapsed === SESSION_GOAL) playBell('goal');
-  } else if (state.elapsed >= 40 * 60) {
+    if (state.elapsed === SESSION_GOAL()) playBell('goal');
+  } else if (state.elapsed >= SESSION_GOAL() * 0.8) {
     el.classList.add('warning');
     if (ring) ring.style.stroke = 'url(#pomo-grad)';
-    hint.textContent = 'Faltam ' + fmtTime(SESSION_GOAL - state.elapsed) + ' para a meta';
-    if (sublabel) sublabel.textContent = 'de 50 min';
+    hint.textContent = 'Faltam ' + fmtTime(SESSION_GOAL() - state.elapsed) + ' para a meta';
+    if (sublabel) sublabel.textContent = 'de ' + Math.floor(SESSION_GOAL()/60) + ' min';
   } else {
     if (ring) ring.style.stroke = 'url(#pomo-grad)';
-    hint.textContent = 'Meta: 50 min';
-    if (sublabel) sublabel.textContent = 'de 50 min';
+    hint.textContent = 'Meta: ' + Math.floor(SESSION_GOAL()/60) + ' min';
+    if (sublabel) sublabel.textContent = 'de ' + Math.floor(SESSION_GOAL()/60) + ' min';
   }
 }
 
@@ -747,13 +787,13 @@ function saveAndInterval() {
   const next = state.queue[state.currentIdx];
   document.getElementById('interval-next-name').textContent = next ? next.name : '—';
   state.intervalElapsed = 0;
-  document.getElementById('interval-timer').textContent = fmtTime(INTERVAL_TOTAL);
+  document.getElementById('interval-timer').textContent = fmtTime(INTERVAL_TOTAL());
   setView('interval');
   renderQueue('queue-card-interval');
   clearInterval(state.intervalTicker);
   state.intervalTicker = setInterval(() => {
     state.intervalElapsed++;
-    const rem = INTERVAL_TOTAL - state.intervalElapsed;
+    const rem = INTERVAL_TOTAL() - state.intervalElapsed;
     if (rem <= 0) {
       clearInterval(state.intervalTicker);
       playBell('interval');
@@ -819,7 +859,7 @@ function toggleCycleTable() {
 
 function renderCycleTable() {
   const days = ['SEG','TER','QUA','QUI','SEX'];
-  const rows = 4;
+  const rows = WEEK_SCHEDULE[0].length;
   const today = new Date().getDay(); // 1=seg...5=sex
   const tbody = document.getElementById('cycle-table-body');
   let html = '';
@@ -933,12 +973,12 @@ function playBell(type) {
     // Play immediately
     playBellOnce(ctx, type, 0);
     if (type === 'goal') {
-      notify('🎯 Meta de 50 min atingida! Toque em qualquer botão para parar o aviso.');
-      sendSystemNotif('🎯 Meta atingida!', 'Você completou 50 min de estudo. Hora de finalizar a sessão.');
+      notify('🎯 Meta de ' + Math.floor(SESSION_GOAL()/60) + ' min atingida! Toque em qualquer botão para parar o aviso.');
+      sendSystemNotif('🎯 Meta atingida!', 'Você completou ' + Math.floor(SESSION_GOAL()/60) + ' min de estudo. Hora de finalizar a sessão.');
     }
     if (type === 'interval') {
       notify('⏱ Intervalo concluído! Hora de estudar.');
-      sendSystemNotif('⏱ Intervalo concluído!', 'Descansou 10 minutos. Hora de voltar aos estudos!');
+      sendSystemNotif('⏱ Intervalo concluído!', 'Descansou ' + Math.floor(INTERVAL_TOTAL()/60) + ' minutos. Hora de voltar aos estudos!');
     }
 
     // Repeat every 4 seconds for up to 5 minutes
