@@ -476,13 +476,17 @@ const NOTES_KEY   = 'circuito_loop_notes_v1';
 const HISTORY_KEY = 'circuito_loop_history_v1';
 
 function saveState() {
-  const today = todayStr();
   const data = {
-    date: today,
+    date: todayStr(),
     queue: state.queue.map(s => s.abbr),
     currentIdx: state.currentIdx,
     sessionsToday: state.sessionsToday,
     totalLiquid: state.totalLiquid,
+    sessionStartTs: state.sessionStartTs,
+    pausedAt: state.pausedAt,
+    elapsed: state.elapsed,
+    phase: document.getElementById('view-study').style.display !== 'none' ? 'study' : 'other',
+    intervalStartTs: state.intervalStartTs,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
@@ -538,7 +542,10 @@ let state = {
   totalLiquid: 0,
   elapsed: 0,
   paused: false,
+  pausedAt: null,       // timestamp when paused
+  sessionStartTs: null, // wall-clock start of current session
   intervalElapsed: 0,
+  intervalStartTs: null,
   ticker: null,
   intervalTicker: null,
   modalSelected: [],
@@ -577,6 +584,44 @@ function init() {
     state.currentIdx = saved.currentIdx;
     state.sessionsToday = saved.sessionsToday;
     state.totalLiquid = saved.totalLiquid;
+
+    // Restore active study session
+    if (saved.phase === 'study' && saved.sessionStartTs) {
+      const s = state.queue[state.currentIdx];
+      if (s) {
+        state.sessionStartTs = saved.sessionStartTs;
+        state.pausedAt = saved.pausedAt || null;
+        state.paused = !!saved.pausedAt;
+
+        if (state.paused) {
+          // Was paused — restore elapsed at pause moment
+          state.elapsed = saved.elapsed || 0;
+        } else {
+          // Was running — compute real elapsed from wall clock
+          state.elapsed = Math.floor((Date.now() - state.sessionStartTs) / 1000);
+        }
+
+        document.getElementById('study-name').textContent = s.name;
+        document.getElementById('study-freq').textContent = s.freq + 'x por semana';
+        document.getElementById('btn-pause').textContent = state.paused ? 'Retomar' : 'Pausar';
+        setView('study');
+        renderStats();
+        setTimerMode(timerModeIdx);
+        updateTimer();
+
+        if (!state.paused) {
+          clearInterval(state.ticker);
+          state.ticker = setInterval(tickSession, 1000);
+          scheduleSessionNotif(); // reschedule alarm for remaining time
+        }
+
+        // Check if goal was already reached while away
+        if (state.elapsed >= SESSION_GOAL()) {
+          playBell('goal');
+        }
+        return;
+      }
+    }
   } else {
     buildDefaultQueue();
   }
@@ -693,16 +738,54 @@ function startSession() {
   document.getElementById('study-freq').textContent = s.freq + 'x por semana';
   state.elapsed = 0;
   state.paused = false;
+  state.pausedAt = null;
+  state.sessionStartTs = Date.now();
   document.getElementById('btn-pause').textContent = 'Pausar';
   setView('study');
+  saveState();
+  scheduleSessionNotif();
   clearInterval(state.ticker);
-  state.ticker = setInterval(() => {
-    if (!state.paused) { state.elapsed++; updateTimer(); }
-  }, 1000);
+  state.ticker = setInterval(tickSession, 1000);
+}
+
+function tickSession() {
+  if (state.paused) return;
+  // Use wall-clock for accuracy
+  const now = Date.now();
+  state.elapsed = Math.floor((now - state.sessionStartTs) / 1000);
+  updateTimer();
+}
+
+function scheduleSessionNotif() {
+  // Cancel any previous scheduled notification timeout
+  if (window._sessionNotifTimeout) clearTimeout(window._sessionNotifTimeout);
+  const remaining = (SESSION_GOAL() - state.elapsed) * 1000;
+  if (remaining <= 0) return;
+  window._sessionNotifTimeout = setTimeout(() => {
+    playBell('goal');
+  }, remaining);
+}
+
+function cancelSessionNotif() {
+  if (window._sessionNotifTimeout) { clearTimeout(window._sessionNotifTimeout); window._sessionNotifTimeout = null; }
 }
 
 function togglePause() {
   state.paused = !state.paused;
+  if (state.paused) {
+    // Record when we paused
+    state.pausedAt = Date.now();
+    cancelSessionNotif();
+  } else {
+    // Shift sessionStartTs forward by paused duration
+    if (state.pausedAt) {
+      const pausedDuration = Date.now() - state.pausedAt;
+      state.sessionStartTs += pausedDuration;
+      state.pausedAt = null;
+    }
+    scheduleSessionNotif();
+  }
+  saveState();
   document.getElementById('btn-pause').textContent = state.paused ? 'Retomar' : 'Pausar';
 }
 
@@ -742,6 +825,7 @@ function updateTimer() {
 
 function finishSession() {
   clearInterval(state.ticker);
+  cancelSessionNotif();
   const s = state.queue[state.currentIdx];
   document.getElementById('finish-title').textContent = 'Sessão: ' + s.name;
   document.getElementById('finish-dur').textContent = fmtTime(state.elapsed);
